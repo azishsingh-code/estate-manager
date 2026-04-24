@@ -921,7 +921,18 @@ box-shadow:
     font-family:var(--sans);transition:all .15s;margin-left:4px;
   }
   .btn-signout:hover{color:var(--red);border-color:rgba(255,82,82,.4);}
+  #estate-map{width:100%;height:100%;z-index:0;}
+  .leaflet-container{background:#111;}
+  .map-overlay-legend{position:absolute;bottom:18px;left:10px;z-index:1000;background:rgba(8,8,8,.85);border:.5px solid var(--border);border-radius:10px;padding:10px 12px;font-size:11px;backdrop-filter:blur(6px);}
+  .map-overlay-legend div{display:flex;align-items:center;gap:7px;margin-bottom:5px;}
+  .map-overlay-legend div:last-child{margin-bottom:0;}
+  .leg-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
+  .map-layer-btn{position:absolute;top:10px;right:10px;z-index:1000;display:flex;flex-direction:column;gap:5px;}
+  .map-layer-btn button{background:rgba(8,8,8,.85);border:.5px solid var(--border);color:var(--gold);font-size:11px;border-radius:8px;padding:5px 10px;cursor:pointer;backdrop-filter:blur(6px);}
+  .map-layer-btn button.active{background:var(--gold);color:#000;}
 </style>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
 <body>
 
@@ -1534,24 +1545,24 @@ box-shadow:
     <div class="screen" id="screen-map">
       <div class="sub-back-bar">
         <button class="sub-back-btn" onclick="goBack()">← Back</button>
-        <div class="sub-screen-title">Field Map</div>
-        <div style="display:flex;gap:6px">
-          <button class="btn-sm" onclick="mapAddBlock()" style="color:var(--green);border-color:rgba(0,200,83,.3)">+ Block</button>
-          <button class="btn-sm" onclick="mapSave()">Save</button>
+        <div class="sub-screen-title">Field Map · நிலவரைபடம்</div>
+      </div>
+      <div style="position:relative;width:100%;height:calc(100dvh - 110px);border-radius:14px;overflow:hidden;border:.5px solid var(--border);">
+        <div id="estate-map"></div>
+        <!-- Layer toggle -->
+        <div class="map-layer-btn">
+          <button id="btn-satellite" class="active" onclick="setMapLayer('satellite')">🛰 Satellite</button>
+          <button id="btn-street" onclick="setMapLayer('street')">🗺 Street</button>
+        </div>
+        <!-- Legend -->
+        <div class="map-overlay-legend">
+          <div><span class="leg-dot" style="background:#F0C840"></span><span>Zone A — Upper</span></div>
+          <div><span class="leg-dot" style="background:#00C853"></span><span>Zone B — Mid</span></div>
+          <div><span class="leg-dot" style="background:#40C4FF"></span><span>Zone C — Lower</span></div>
+          <div><span class="leg-dot" style="background:#4FC3F7;border-radius:2px"></span><span>Ponds</span></div>
+          <div><span class="leg-dot" style="background:#FF9800;border-radius:2px"></span><span>Roads / Entry</span></div>
         </div>
       </div>
-      <div class="map-hint">Drag blocks to position · Tap to rename · Pinch or use buttons to resize</div>
-      <div class="map-toolbar">
-        <button class="map-tool-btn" onclick="mapZoom(1.15)" title="Zoom in">＋</button>
-        <button class="map-tool-btn" onclick="mapZoom(0.87)" title="Zoom out">－</button>
-        <button class="map-tool-btn" onclick="mapResetView()" title="Fit all">⊡</button>
-        <div style="flex:1"></div>
-        <button class="map-tool-btn" onclick="mapClearSelected()" title="Delete selected" style="color:var(--red)">🗑</button>
-      </div>
-      <div class="map-canvas-wrap">
-        <canvas id="map-canvas"></canvas>
-      </div>
-      <div id="map-block-panel" class="map-block-panel" style="display:none"></div>
     </div>
 
   </div><!-- end #content -->
@@ -1743,6 +1754,14 @@ const dbDelete=(s,id)=>new Promise((res,rej)=>{const t=db.transaction(s,'readwri
 const dbPut=(s,d)=>new Promise((res,rej)=>{const t=db.transaction(s,'readwrite'),r=t.objectStore(s).put(d);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);});
 
 // ═══════════════════════════════════════════════
+// Date utilities
+// ═══════════════════════════════════════════════
+function toLocalDateStr(d){const y=d.getFullYear();const m=String(d.getMonth()+1).padStart(2,'0');const dy=String(d.getDate()).padStart(2,'0');return `${y}-${m}-${dy}`;}
+const today=()=>toLocalDateStr(new Date());
+const fmtDate=d=>new Date(d+'T00:00:00').toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});
+
+
+// ═══════════════════════════════════════════════
 // Roles (localStorage)
 // ═══════════════════════════════════════════════
 const DEFAULT_ROLES=['Plucker','Pruner','Sprayer','General'];
@@ -1755,19 +1774,26 @@ function setRoles(r){localStorage.setItem('customRoles',JSON.stringify(r));}
 const DEFAULT_VILLAGES=[{name:'Puliyur',color:'#6abf7a'},{name:'Vellakadai',color:'#6aaee0'}];
 function getVillages(){try{return JSON.parse(localStorage.getItem('villages'))||DEFAULT_VILLAGES;}catch{return DEFAULT_VILLAGES;}}
 function setVillages(v){localStorage.setItem('villages',JSON.stringify(v));}
-function getVillageColor(name){const v=getVillages().find(x=>x.name===name);return v?v.color:'#9a9070';}
+function getVillageColor(name){const nl=(name||'').toLowerCase();const v=getVillages().find(x=>x.name.toLowerCase()===nl);return v?v.color:'#9a9070';}
 function groupByVillage(workerList){
   const villages=getVillages();
   const villageMap={};
-  villages.forEach(v=>{villageMap[v.name]={village:v.name,color:v.color,workers:[]};});
+  // Build map keyed by lowercase for matching, but store display name from localStorage
+  villages.forEach(v=>{villageMap[v.name.toLowerCase()]={village:v.name,color:v.color,workers:[]};});
   villageMap['']={village:'',color:'#9a9070',workers:[]};
   workerList.forEach(w=>{
-    const key=w.village||'';
-    if(!villageMap[key])villageMap[key]={village:key,color:getVillageColor(key),workers:[]};
+    const raw=w.village||'';
+    const key=raw.toLowerCase();
+    if(!villageMap[key])villageMap[key]={village:raw,color:getVillageColor(raw),workers:[]};
     villageMap[key].workers.push(w);
   });
   const groups=[];
-  villages.forEach(v=>{if(villageMap[v.name].workers.length)groups.push(villageMap[v.name]);});
+  villages.forEach(v=>{if(villageMap[v.name.toLowerCase()].workers.length)groups.push(villageMap[v.name.toLowerCase()]);});
+  // Add any unrecognised villages (not in localStorage) at the end
+  Object.keys(villageMap).forEach(k=>{
+    if(k===''||villages.some(v=>v.name.toLowerCase()===k))return;
+    if(villageMap[k].workers.length)groups.push(villageMap[k]);
+  });
   if(villageMap[''].workers.length)groups.push(villageMap['']);
   return groups;
 }
@@ -2427,388 +2453,126 @@ async function renderInventory(){
 }
 
 // ════════════════════════════════════════════════════
-// FIELD MAP — canvas drag-and-drop sketch
+// FIELD MAP — Leaflet satellite map with overlays
 // ════════════════════════════════════════════════════
-let mapBlocks=[],mapSelected=null,mapScale=1,mapOffsetX=0,mapOffsetY=0;
-let mapDrag=null,mapCanvas=null,mapCtx=null;
-let mapRenameId=null;
-const MAP_COLORS=['#F0C840','#00C853','#40C4FF','#FF5252','#FF9800','#E040FB','#80CBC4','#BCAAA4'];
+let _estateMap = null;
+let _satelliteLayer = null;
+let _streetLayer = null;
 
-function mapLoadState(){
-  try{const s=localStorage.getItem('fieldMapBlocks');if(s)mapBlocks=JSON.parse(s);}catch{}
-  if(!mapBlocks.length)mapBlocks=[];
-}
-function mapSave(){
-  localStorage.setItem('fieldMapBlocks',JSON.stringify(mapBlocks));
-  toast('Map saved ✓');
-}
+// Estate center: 11°51'17.0"N 78°15'33.2"E
+const ESTATE_CENTER = [11.854722, 78.259222];
+const ESTATE_ZOOM = 16;
+
+// ── Zone polygons (approximate, centered on estate) ──
+// These are placeholder offsets — user can refine later
+const ZONE_A = [ // Upper zone — NW quadrant
+  [11.8562, 78.2578], [11.8568, 78.2595], [11.8558, 78.2602], [11.8548, 78.2590], [11.8552, 78.2578]
+];
+const ZONE_B = [ // Mid zone — center
+  [11.8548, 78.2590], [11.8558, 78.2602], [11.8550, 78.2610], [11.8540, 78.2605], [11.8538, 78.2592]
+];
+const ZONE_C = [ // Lower zone — SE quadrant
+  [11.8538, 78.2592], [11.8540, 78.2605], [11.8530, 78.2612], [11.8522, 78.2600], [11.8528, 78.2588]
+];
+
+// ── Ponds (approximate positions) ──
+const POND_1 = [[11.8552, 78.2598], [11.8554, 78.2602], [11.8550, 78.2604], [11.8548, 78.2600]];
+const POND_2 = [[11.8535, 78.2594], [11.8537, 78.2598], [11.8533, 78.2600], [11.8531, 78.2596]];
+
+// ── Roads / entry ──
+const MAIN_ROAD = [[11.8540, 78.2575], [11.8547, 78.2592], [11.8554, 78.2605]];
 
 async function initMap(){
-  mapCanvas=document.getElementById('map-canvas');
-  if(!mapCanvas)return;
-  const wrap=mapCanvas.parentElement;
-  const W=wrap.clientWidth||340;
-  mapCanvas.width=W;mapCanvas.height=Math.round(W*0.75);
-  mapCtx=mapCanvas.getContext('2d');
-  mapLoadState();
-  await syncFieldsToMap();
-  mapDrawAll();
-  // Remove old listeners before re-adding
-  const newCanvas=mapCanvas.cloneNode(true);
-  mapCanvas.parentNode.replaceChild(newCanvas,mapCanvas);
-  mapCanvas=newCanvas;
-  mapCtx=mapCanvas.getContext('2d');
-  mapDrawAll();
-  setupMapEvents();
-}
+  const el = document.getElementById('estate-map');
+  if(!el) return;
 
-function mapDrawAll(){
-  if(!mapCtx)return;
-  const W=mapCanvas.width,H=mapCanvas.height;
-  mapCtx.clearRect(0,0,W,H);
-  // Background grid
-  mapCtx.save();
-  mapCtx.strokeStyle='rgba(255,255,255,.05)';
-  mapCtx.lineWidth=.5;
-  const gs=30*mapScale;
-  const ox=((mapOffsetX%gs)+gs)%gs,oy=((mapOffsetY%gs)+gs)%gs;
-  for(let x=ox;x<W;x+=gs){mapCtx.beginPath();mapCtx.moveTo(x,0);mapCtx.lineTo(x,H);mapCtx.stroke();}
-  for(let y=oy;y<H;y+=gs){mapCtx.beginPath();mapCtx.moveTo(0,y);mapCtx.lineTo(W,y);mapCtx.stroke();}
-  mapCtx.restore();
-  // Blocks
-  mapBlocks.forEach(b=>{
-    const bx=b.x*mapScale+mapOffsetX,by=b.y*mapScale+mapOffsetY;
-    const bw=b.w*mapScale,bh=b.h*mapScale;
-    mapCtx.save();
-    mapCtx.fillStyle=b.color+'28';
-    mapCtx.strokeStyle=b.id===mapSelected?'#fff':b.color;
-    mapCtx.lineWidth=b.id===mapSelected?2.5:1.5;
-    mapCtx.shadowColor=b.color;
-    mapCtx.shadowBlur=b.id===mapSelected?12:4;
-    roundRect(mapCtx,bx,by,bw,bh,8);
-    mapCtx.fill();mapCtx.stroke();
-    mapCtx.restore();
-    // Label
-    mapCtx.save();
-    mapCtx.fillStyle=b.id===mapSelected?'#fff':b.color;
-    mapCtx.font=`bold ${Math.max(10,Math.min(14,bw/6))}px DM Sans,sans-serif`;
-    mapCtx.textAlign='center';mapCtx.textBaseline='middle';
-    mapCtx.shadowColor=b.color;mapCtx.shadowBlur=6;
-    const lines=b.name.split(' ');
-    if(lines.length===1||bh<40*mapScale){
-      mapCtx.fillText(b.name,bx+bw/2,by+bh/2);
-    } else {
-      mapCtx.fillText(lines[0],bx+bw/2,by+bh/2-9*mapScale);
-      mapCtx.fillText(lines.slice(1).join(' '),bx+bw/2,by+bh/2+9*mapScale);
-    }
-    if(b.size){
-      mapCtx.font=`${Math.max(8,Math.min(11,bw/8))}px DM Sans,sans-serif`;
-      mapCtx.fillStyle=b.color+'99';mapCtx.shadowBlur=0;
-      mapCtx.fillText(b.size,bx+bw/2,by+bh-10*mapScale);
-    }
-    mapCtx.restore();
-    // Resize handle
-    if(b.id===mapSelected){
-      mapCtx.save();
-      mapCtx.fillStyle='#fff';
-      mapCtx.strokeStyle=b.color;mapCtx.lineWidth=1.5;
-      mapCtx.beginPath();mapCtx.arc(bx+bw,by+bh,6,0,Math.PI*2);mapCtx.fill();mapCtx.stroke();
-      mapCtx.restore();
-    }
+  // Destroy existing map instance if any
+  if(_estateMap){ _estateMap.remove(); _estateMap = null; }
+
+  _estateMap = L.map('estate-map', {
+    center: ESTATE_CENTER,
+    zoom: ESTATE_ZOOM,
+    zoomControl: true,
+    attributionControl: false
   });
-}
 
-function roundRect(ctx,x,y,w,h,r){
-  ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.arcTo(x+w,y,x+w,y+r,r);
-  ctx.lineTo(x+w,y+h-r);ctx.arcTo(x+w,y+h,x+w-r,y+h,r);
-  ctx.lineTo(x+r,y+h);ctx.arcTo(x,y+h,x,y+h-r,r);
-  ctx.lineTo(x,y+r);ctx.arcTo(x,y,x+r,y,r);ctx.closePath();
-}
+  // Satellite layer (Esri World Imagery)
+  _satelliteLayer = L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    { maxZoom: 20, attribution: 'Esri' }
+  );
 
-function canvasToWorld(cx,cy){return{x:(cx-mapOffsetX)/mapScale,y:(cy-mapOffsetY)/mapScale};}
-function hitTest(wx,wy){
-  for(let i=mapBlocks.length-1;i>=0;i--){
-    const b=mapBlocks[i];
-    if(wx>=b.x&&wx<=b.x+b.w&&wy>=b.y&&wy<=b.y+b.h)return b;
-  }return null;
-}
-function hitTestResize(bx,by,bw,bh,cx,cy){
-  const rx=bx+bw,ry=by+bh;
-  const dist=Math.hypot(cx-(rx*mapScale+mapOffsetX),cy-(ry*mapScale+mapOffsetY));
-  return dist<14;
-}
+  // Street layer (OpenStreetMap)
+  _streetLayer = L.tileLayer(
+    'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    { maxZoom: 19, attribution: 'OSM' }
+  );
 
-function setupMapEvents(){
-  if(!mapCanvas)return;
-  let startX,startY,origX,origY,origW,origH,mode=null;
+  _satelliteLayer.addTo(_estateMap);
 
-  function getPos(e){
-    const r=mapCanvas.getBoundingClientRect();
-    const t=e.touches?e.touches[0]:e;
-    return{x:t.clientX-r.left,y:t.clientY-r.top};
-  }
-  function pointerDown(e){
-    e.preventDefault();
-    const {x,y}=getPos(e);
-    const {x:wx,y:wy}=canvasToWorld(x,y);
-    const hit=hitTest(wx,wy);
-    if(hit&&hit.id===mapSelected){
-      if(hitTestResize(hit.x,hit.y,hit.w,hit.h,x,y)){
-        mode='resize';origW=hit.w;origH=hit.h;startX=x;startY=y;mapDrag=hit;return;
-      }
-      mode='drag';origX=hit.x;origY=hit.y;startX=x;startY=y;mapDrag=hit;return;
-    }
-    if(hit){mapSelected=hit.id;mapDrawAll();mode='drag';origX=hit.x;origY=hit.y;startX=x;startY=y;mapDrag=hit;}
-    else{mapSelected=null;mapDrawAll();mode='pan';startX=x;startY=y;origX=mapOffsetX;origY=mapOffsetY;}
-  }
-  function pointerMove(e){
-    if(!mode)return;e.preventDefault();
-    const {x,y}=getPos(e);
-    const dx=(x-startX)/mapScale,dy=(y-startY)/mapScale;
-    if(mode==='drag'&&mapDrag){mapDrag.x=origX+dx;mapDrag.y=origY+dy;mapDrawAll();}
-    else if(mode==='resize'&&mapDrag){mapDrag.w=Math.max(60,origW+dx);mapDrag.h=Math.max(40,origH+dy);mapDrawAll();}
-    else if(mode==='pan'){mapOffsetX=origX+(x-startX);mapOffsetY=origY+(y-startY);mapDrawAll();}
-  }
-  function pointerUp(){mode=null;mapDrag=null;}
-  function dblClick(e){
-    const {x,y}=getPos(e);const {x:wx,y:wy}=canvasToWorld(x,y);
-    const hit=hitTest(wx,wy);
-    if(hit){mapRenameId=hit.id;document.getElementById('map-block-name-input').value=hit.name;document.getElementById('map-name-modal').classList.add('open');}
-  }
-  mapCanvas.addEventListener('mousedown',pointerDown);
-  mapCanvas.addEventListener('mousemove',pointerMove);
-  mapCanvas.addEventListener('mouseup',pointerUp);
-  mapCanvas.addEventListener('touchstart',pointerDown,{passive:false});
-  mapCanvas.addEventListener('touchmove',pointerMove,{passive:false});
-  mapCanvas.addEventListener('touchend',pointerUp);
-  mapCanvas.addEventListener('dblclick',dblClick);
-}
+  // ── Zone overlays ──
+  L.polygon(ZONE_A, {
+    color: '#F0C840', fillColor: '#F0C840', fillOpacity: 0.18, weight: 2, dashArray: '5,4'
+  }).addTo(_estateMap).bindPopup('<b style="color:#F0C840">Zone A — Upper</b><br>pH 3.88–4.20<br>Apply lime + MgSO₄');
 
-function mapAddBlock(){
-  const colors=MAP_COLORS;
-  const color=colors[mapBlocks.length%colors.length];
-  const id=Date.now();
-  const cx=(mapCanvas.width/2-mapOffsetX)/mapScale;
-  const cy=(mapCanvas.height/2-mapOffsetY)/mapScale;
-  mapBlocks.push({id,name:'New Block',x:cx-60,y:cy-35,w:120,h:70,color,size:''});
-  mapSelected=id;
-  mapDrawAll();
-  // Immediately open rename
-  mapRenameId=id;
-  document.getElementById('map-block-name-input').value='New Block';
-  document.getElementById('map-name-modal').classList.add('open');
-}
+  L.polygon(ZONE_B, {
+    color: '#00C853', fillColor: '#00C853', fillOpacity: 0.18, weight: 2, dashArray: '5,4'
+  }).addTo(_estateMap).bindPopup('<b style="color:#00C853">Zone B — Mid</b><br>pH 4.20–4.50<br>Apply lime + MgSO₄');
 
-function mapClearSelected(){
-  if(!mapSelected)return;
-  mapBlocks=mapBlocks.filter(b=>b.id!==mapSelected);
-  mapSelected=null;mapDrawAll();
-}
+  L.polygon(ZONE_C, {
+    color: '#40C4FF', fillColor: '#40C4FF', fillOpacity: 0.18, weight: 2, dashArray: '5,4'
+  }).addTo(_estateMap).bindPopup('<b style="color:#40C4FF">Zone C — Lower</b><br>pH 4.50–4.67<br>Apply lime + MgSO₄');
 
-function mapZoom(factor){
-  mapScale=Math.max(0.4,Math.min(3,mapScale*factor));
-  mapDrawAll();
-}
+  // ── Ponds ──
+  L.polygon(POND_1, {
+    color: '#4FC3F7', fillColor: '#4FC3F7', fillOpacity: 0.5, weight: 2
+  }).addTo(_estateMap).bindPopup('<b style="color:#4FC3F7">Pond 1</b><br>40×40×30 ft · ~11L litres');
 
-function mapResetView(){
-  if(!mapBlocks.length){mapScale=1;mapOffsetX=0;mapOffsetY=0;mapDrawAll();return;}
-  const xs=mapBlocks.map(b=>b.x),ys=mapBlocks.map(b=>b.y);
-  const xe=mapBlocks.map(b=>b.x+b.w),ye=mapBlocks.map(b=>b.y+b.h);
-  const minX=Math.min(...xs),minY=Math.min(...ys),maxX=Math.max(...xe),maxY=Math.max(...ye);
-  const pad=30,W=mapCanvas.width,H=mapCanvas.height;
-  mapScale=Math.min((W-pad*2)/(maxX-minX||1),(H-pad*2)/(maxY-minY||1),2);
-  mapOffsetX=W/2-(minX+(maxX-minX)/2)*mapScale;
-  mapOffsetY=H/2-(minY+(maxY-minY)/2)*mapScale;
-  mapDrawAll();
-}
+  L.polygon(POND_2, {
+    color: '#4FC3F7', fillColor: '#4FC3F7', fillOpacity: 0.5, weight: 2
+  }).addTo(_estateMap).bindPopup('<b style="color:#4FC3F7">Pond 2</b><br>40×40×30 ft · ~11L litres');
 
-function saveMapBlockName(){
-  const name=document.getElementById('map-block-name-input').value.trim()||'Block';
-  const b=mapBlocks.find(b=>b.id===mapRenameId);
-  if(b){b.name=name;}
-  closeModal('map-name-modal');
-  mapDrawAll();
-}
+  // ── Roads / entry ──
+  L.polyline(MAIN_ROAD, {
+    color: '#FF9800', weight: 3, opacity: 0.85
+  }).addTo(_estateMap).bindPopup('<b style="color:#FF9800">Main Entry Road</b>');
 
-// Also sync fields → map blocks (preload field names as blocks if map is empty)
-async function syncFieldsToMap(){
-  if(mapBlocks.length)return;
-  const fields=await dbGetAll('fields');
-  if(!fields.length)return;
-  const cols=2,W=120,H=70,gap=20,startX=20,startY=20;
-  fields.forEach((f,i)=>{
-    mapBlocks.push({id:f.id*1000+1,name:f.name,
-      x:startX+(i%cols)*(W+gap),y:startY+Math.floor(i/cols)*(H+gap),
-      w:W,h:H,color:f.color||MAP_COLORS[i%MAP_COLORS.length],
-      size:f.size?`${f.size} ${f.unit}`:''});
+  // ── Estate center marker ──
+  const goldIcon = L.divIcon({
+    html: '<div style="width:14px;height:14px;background:#F0C840;border-radius:50%;border:2px solid #fff;box-shadow:0 0 8px #F0C840"></div>',
+    className: '', iconAnchor: [7, 7]
   });
+  L.marker(ESTATE_CENTER, {icon: goldIcon})
+    .addTo(_estateMap)
+    .bindPopup('<b style="color:#F0C840">Vellakadai Estate</b><br>40 acres · Arabica Coffee<br>Yercaud, Tamil Nadu');
+
+  // Fix map size after screen transition
+  setTimeout(()=>{ if(_estateMap) _estateMap.invalidateSize(); }, 300);
 }
 
-// ═══════════════════════════════════════════════
-// Helpers
-// ═══════════════════════════════════════════════
-function toLocalDateStr(d){const y=d.getFullYear();const m=String(d.getMonth()+1).padStart(2,'0');const dy=String(d.getDate()).padStart(2,'0');return `${y}-${m}-${dy}`;}
-const today=()=>toLocalDateStr(new Date());
-const thisMonth=()=>new Date().toISOString().slice(0,7);
-const fmtDate=d=>new Date(d+'T00:00:00').toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});
-const fmtMoney=n=>'₹'+Number(n).toLocaleString('en-IN');
-function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2400);}
-function setDateInputs(){
-  const t=today(),m=thisMonth();
-  ['att-date-input','rain-date','exp-date','hv-date','tr-date','inv-purchased','fw-date'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=t;});
-  const rm=document.getElementById('report-month');if(rm)rm.value=m;
-  const hfm=document.getElementById('harvest-filter-month');if(hfm)hfm.value=m;
-}
-document.getElementById('today-date').textContent=fmtDate(today());
-
-// ═══════════════════════════════════════════════
-// Workers
-// ═══════════════════════════════════════════════
-let workers=[];
-async function loadWorkers(){
-  workers=await dbGetAll('workers');
-  const seen=new Set();
-  workers=workers.filter(w=>{if(seen.has(w.id))return false;seen.add(w.id);return true;});
-}
-
-async function removeDuplicateWorkers(){
-  const all=await dbGetAll('workers');
-  const keep={};
-  all.forEach(w=>{keep[w.name.toLowerCase()]=w;});
-  const keepIds=new Set(Object.values(keep).map(w=>w.id));
-  const toDelete=all.filter(w=>!keepIds.has(w.id));
-  for(const w of toDelete)await syncWrite('delete','workers',w.id);
-  await loadWorkers();renderWorkerList();renderWorkerAttList();
-  toast(`Removed ${toDelete.length} duplicate${toDelete.length!==1?'s':''} ✓`);
-}
-
-function confirmClearAllWorkers(){
-  document.getElementById('confirm-title').textContent='Clear all workers?';
-  document.getElementById('confirm-msg').textContent='Permanently deletes all workers. Attendance records are kept. Cannot be undone.';
-  pendingAction=async()=>{
-    const all=await dbGetAll('workers');
-    for(const w of all)await syncWrite('delete','workers',w.id);
-    await loadWorkers();renderWorkerList();renderWorkerAttList();refreshDash();
-    toast('All workers cleared');
-  };
-  document.getElementById('confirm-modal').classList.add('open');
-}
-
-function renderWorkerList(){
-  const el=document.getElementById('worker-list-items');
-  const count=workers.length;
-  document.getElementById('worker-count').textContent=count+' worker'+(count!==1?'s':'');
-  if(!count){el.innerHTML='<div style="color:var(--muted);font-size:13px;padding:10px 0;text-align:center">No workers yet — tap + Worker</div>';return;}
-  const nameSeen={};
-  workers.forEach(w=>{nameSeen[w.name.toLowerCase()]=(nameSeen[w.name.toLowerCase()]||0)+1;});
-  const hasDups=Object.values(nameSeen).some(c=>c>1);
-  const dupWarn=document.getElementById('dup-warning');
-  if(dupWarn)dupWarn.style.display=hasDups?'block':'none';
-  const groups=groupByVillage(workers);
-  el.innerHTML=groups.map(g=>`
-    <div class="village-group-header">
-      <span class="village-dot" style="background:${g.color}"></span>
-      <span style="color:${g.color}">${g.village||'No village'}</span>
-      <span style="color:var(--muted)">(${g.workers.length})</span>
-    </div>
-    ${g.workers.map(w=>`
-    <div class="worker-list-item" style="border-left:3px solid ${g.color};padding-left:10px;margin-left:2px${nameSeen[w.name.toLowerCase()]>1?';background:rgba(224,112,96,.07)':''}">
-      <div class="worker-list-info">
-        <div class="worker-list-name">${w.name}${nameSeen[w.name.toLowerCase()]>1?' <span style="font-size:10px;color:var(--red)">(dup)</span>':''}</div>
-        <div class="worker-list-role">${w.role}${w.addedOn?' · joined '+fmtDate(w.addedOn):''}</div>
-      </div>
-      <div class="worker-list-actions">
-        <button class="btn-edit" onclick="openEditWorkerModal(${w.id})">✎ Edit</button>
-        <button class="btn-del" onclick="confirmDeleteWorker(${w.id},'${w.name.replace(/'/g,"\\'")}')">✕</button>
-      </div>
-    </div>`).join('')}`).join('');
-}
-
-// Worker modal
-function populateRoleSelect(selectedRole){
-  const sel=document.getElementById('wm-role');const roles=getRoles();
-  sel.innerHTML=roles.map(r=>`<option value="${r}" ${r===selectedRole?'selected':''}>${r}</option>`).join('');
-}
-function openAddWorkerModal(){
-  document.getElementById('wm-id').value='';
-  document.getElementById('wm-name').value='';
-  document.getElementById('wm-date').value=today();
-  populateRoleSelect(getRoles()[0]);populateVillageSelect('');
-  document.getElementById('worker-modal-title').textContent='Add worker · வேலையாள் சேர்';
-  document.getElementById('wm-save-label').textContent='Save worker';
-  document.getElementById('worker-modal').classList.add('open');
-}
-function openEditWorkerModal(id){
-  const w=workers.find(x=>x.id===id);if(!w)return;
-  document.getElementById('wm-id').value=id;
-  document.getElementById('wm-name').value=w.name;
-  document.getElementById('wm-date').value=w.addedOn||today();
-  populateRoleSelect(w.role);populateVillageSelect(w.village||'');
-  document.getElementById('worker-modal-title').textContent='Edit worker · திருத்து';
-  document.getElementById('wm-save-label').textContent='Update worker';
-  document.getElementById('worker-modal').classList.add('open');
-}
-function closeWorkerModal(e){if(!e||e.target===document.getElementById('worker-modal'))document.getElementById('worker-modal').classList.remove('open');}
-async function saveWorkerModal(){
-  const name=document.getElementById('wm-name').value.trim();
-  const role=document.getElementById('wm-role').value;
-  const addedOn=document.getElementById('wm-date').value;
-  const village=document.getElementById('wm-village').value;
-  const idVal=document.getElementById('wm-id').value;
-  if(!name){toast('Enter name · பெயர் உள்ளிடவும்');return;}
-  if(idVal){
-    const existing=workers.find(x=>x.id===parseInt(idVal));
-    await syncWrite('put','workers',{...existing,name,role,addedOn,village});
-    toast('Updated ✓');
+function setMapLayer(type){
+  if(!_estateMap) return;
+  if(type === 'satellite'){
+    _estateMap.removeLayer(_streetLayer);
+    _satelliteLayer.addTo(_estateMap);
+    document.getElementById('btn-satellite').classList.add('active');
+    document.getElementById('btn-street').classList.remove('active');
   } else {
-    await syncWrite('add','workers',{name,role,addedOn,village});
-    toast('Worker added ✓');
+    _estateMap.removeLayer(_satelliteLayer);
+    _streetLayer.addTo(_estateMap);
+    document.getElementById('btn-street').classList.add('active');
+    document.getElementById('btn-satellite').classList.remove('active');
   }
-  document.getElementById('worker-modal').classList.remove('open');
-  await loadWorkers();renderWorkerList();renderWorkerAttList();renderRateRows();renderMaster();refreshDash();
 }
 
-// ═══════════════════════════════════════════════
-// Role manager
-// ═══════════════════════════════════════════════
-function openRoleManager(){renderRoleItems();document.getElementById('role-modal').classList.add('open');}
-function closeRoleModal(e){if(!e||e.target===document.getElementById('role-modal'))document.getElementById('role-modal').classList.remove('open');}
-function renderRoleItems(){
-  const roles=getRoles();const el=document.getElementById('role-items');
-  if(!roles.length){el.innerHTML='<div style="color:var(--muted);font-size:13px;padding:8px 0">No roles yet</div>';return;}
-  el.innerHTML=roles.map((r,i)=>`
-    <div class="role-item" id="role-row-${i}">
-      <div class="role-item-name" id="role-name-${i}">${r}</div>
-      <div class="role-item-actions">
-        <button class="btn-edit" onclick="startRenameRole(${i})">✎</button>
-        <button class="btn-del" onclick="deleteRole(${i},'${r.replace(/'/g,"\\'")}')">✕</button>
-      </div>
-    </div>`).join('');
-}
-function startRenameRole(i){
-  const roles=getRoles();const row=document.getElementById('role-row-'+i);
-  row.innerHTML=`<input type="text" value="${roles[i]}" id="rename-input-${i}" style="flex:1;font-size:13px;padding:6px 10px">
-    <div style="display:flex;gap:6px">
-      <button class="btn-edit" onclick="confirmRenameRole(${i})">✓</button>
-      <button class="btn-del" onclick="renderRoleItems()">✕</button>
-    </div>`;
-  document.getElementById('rename-input-'+i)?.focus();
-}
-function confirmRenameRole(i){
-  const val=document.getElementById('rename-input-'+i)?.value.trim();
-  if(!val){toast('Enter a name');return;}
-  const roles=getRoles();roles[i]=val;setRoles(roles);renderRoleItems();renderRateRows();toast('Renamed ✓');
-}
-function deleteRole(i,name){
-  const roles=getRoles();if(roles.length<=1){toast('Need at least one role');return;}
-  roles.splice(i,1);setRoles(roles);renderRoleItems();renderRateRows();toast(`"${name}" removed`);
-}
-function addRole(){
-  const val=document.getElementById('new-role-input').value.trim();
-  if(!val){toast('Enter role name');return;}
-  const roles=getRoles();if(roles.includes(val)){toast('Role already exists');return;}
-  roles.push(val);setRoles(roles);document.getElementById('new-role-input').value='';renderRoleItems();renderRateRows();toast(`"${val}" added ✓`);
-}
+// Stub out old canvas functions so no errors
+function mapLoadState(){}
+function mapSave(){ toast('Map saved ✓'); }
+function mapAddBlock(){}
+function mapZoom(){}
+function mapResetView(){ if(_estateMap){ _estateMap.setView(ESTATE_CENTER, ESTATE_ZOOM); } }
+function mapClearSelected(){}
+function mapDrawAll(){}
 
 // ═══════════════════════════════════════════════
 // Attendance (checkbox style)
